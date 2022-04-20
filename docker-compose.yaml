@@ -1,0 +1,18 @@
+version: '3.7'
+
+services:
+
+  localstack:
+    image: localstack/localstack:0.12.10
+    container_name: "alarmreporter-localstack-0.12.10"
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=sns,logs
+
+  wait:
+    image: waisbrot/wait
+    depends_on:
+      - localstack
+    environment:
+      - TARGETS=localstack:4566

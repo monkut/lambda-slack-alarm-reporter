@@ -1,0 +1,200 @@
+version: 2
+
+jobs:
+  build:
+    working_directory: ~/app/
+    docker:
+      - image: circleci/python:3.8
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+      - image: localstack/localstack:0.12.10
+
+    steps:
+      - checkout
+      - run: sudo chown -R circleci:circleci /usr/local/bin
+      - run: sudo chown -R circleci:circleci /usr/local/lib/python3.8/site-packages
+      - restore_cache:
+          key: deps-v1-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
+      - run:
+          name: Upgrade pip/pipenv
+          command: |
+            pip install pip -U
+            pip install pipenv -U
+      - run:
+          name: prepare boto3 credentials and awscli (Set via ENVARS[AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY])
+          environment:
+            AWS_DEFAULT_REGION: ap-northeast-1
+            AWS_PROFILE: circleci
+            AWS_ACCESS_KEY_ID: dummyaaccesskey
+            AWS_SECRET_ACCESS_KEY: dummysecretkey
+          command: |
+            # create ~/.aws/config
+            echo "Creating: ~/.aws/config"
+            mkdir -p ~/.aws
+            cat <<EOT > ~/.aws/config
+            [default]
+            region = ${AWS_DEFAULT_REGION}
+            output = json
+            [profile ${AWS_PROFILE}]
+            region = ${AWS_DEFAULT_REGION}
+            source_profile = default
+            EOT
+            # create .aws/credentials
+            echo "Creating: ~/.aws/credentials"
+            cat <<EOT > ~/.aws/credentials
+            [default]
+            aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+            aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+            EOT
+      - run:
+          name: install dependencies
+          command: |
+            pipenv sync --dev
+      - save_cache:
+          key: deps-v1-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
+          paths:
+            - "/home/circleci/.aws"
+            - "/home/circlci/.local"
+            - "/usr/local/bin"
+            - "/usr/local/lib/python3.8/site-packages"
+
+      - run:
+          name: code checks (flake8)
+          command: |
+            make flake8
+
+      - run:
+          name: run tests
+          environment:
+            AWS_DEFAULT_REGION: ap-northeast-12
+            AWS_PROFILE: circleci
+            AWS_ACCESS_KEY_ID: dummyaaccesskey
+            AWS_SECRET_ACCESS_KEY: dummysecretkey
+            LOG_LEVEL: DEBUG
+          command: |
+
+            make test
+
+      - store_test_results:
+          path: test-reports
+
+      - store_artifacts:
+          path: test-reports
+
+  package:
+    docker:
+      - image: circleci/python:3.8
+    steps:
+      - checkout
+      - run: sudo chown -R circleci:circleci /usr/local/bin
+      - run: sudo chown -R circleci:circleci /usr/local/lib/python3.8/site-packages
+      - restore_cache:
+          key: deps-v5-{{ .Branch }}-deploy-{{ checksum "Pipfile.lock" }}
+      - run:
+          name: prepare boto3 credentials and awscli (Set via ENVARS[AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY])
+          environment:
+            AWS_DEFAULT_REGION: ap-northeast-1
+            AWS_PROFILE: circleci
+            AWS_ACCESS_KEY_ID: dummyaaccesskey
+            AWS_SECRET_ACCESS_KEY: dummysecretkey
+          command: |
+            # create ~/.aws/config
+            echo "Creating: ~/.aws/config"
+            mkdir -p ~/.aws
+            cat <<EOT > ~/.aws/config
+            [default]
+            region = ${AWS_DEFAULT_REGION}
+            output = json
+            [profile ${AWS_PROFILE}]
+            region = ${AWS_DEFAULT_REGION}
+            source_profile = default
+            EOT
+            # create .aws/credentials
+            echo "Creating: ~/.aws/credentials"
+            cat <<EOT > ~/.aws/credentials
+            [default]
+            aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+            aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+            EOT
+      - run:
+          name: Upgrade pip/virtualenv/pipenv & zappa settings generator
+          command: |
+            pip install pip -U
+            pip install setuptools -U
+            pip install virtualenv -U
+            pip install pipenv -U
+            pip install boto3
+      - run:
+          name: install locked dependencies
+          command: |
+            # Project Packages
+            pipenv sync
+      - save_cache:
+          key: deps-v5-{{ .Branch }}-deploy-{{ checksum "Pipfile.lock" }}
+          paths:
+            - "/home/circleci/.aws"
+            - "/home/circleci/.profile"
+            - "/home/circleci/.local/"
+            - "/usr/local/bin"
+            - "/usr/local/lib/python3.8/site-packages"
+      - run:
+          name: (prd) prepare zappa_settings
+          environment:
+            API_STAGE: prd
+          command: |
+            pip install git+https://github.com/monkut/zappa-configuration-generator
+            python3.8 -m gappa.settings.generate --stack-name artsub-alarmreporter-${API_STAGE} --stage ${API_STAGE} --runtime python3.9 --zappa-parameters project_name=artsub-alarm-reporter s3_bucket=dummybucket timeout_seconds=900 binary_support=True --ignore-default-excludes > ./zappa_settings.json
+            cat ./zappa_settings.json
+
+      - run:
+          name: save application package artifact
+          command: |
+            mkdir -p ~/artifacts
+            # install jq for removing envars from zappa_settings.json
+            sudo apt update
+            sudo apt install jq
+            mv zappa_settings.json zappa_settings.orig
+            # Assumes the zappa stage is 'prd', remove envars so that variables may be overwritten via lambda configuration
+            cat zappa_settings.orig | jq 'del(.prd.environment_variables)' | jq --arg APP_VERSION $(git describe --always) '.prd.environment_variables = {"APP_VERSION": $APP_VERSION}' > zappa_settings.json
+            pipenv run zappa package prd -o ~/artifacts/lambda-slack-alarms-reporter-app.zip
+      - persist_to_workspace:
+          root: ~/artifacts
+          paths:
+            - lambda-slack-alarms-reporter-app.zip
+
+  publish-github-release:
+    docker:
+      - image: cibuilds/github:0.12
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/artifacts
+      - run:
+          name: "Publish Release on GitHub"
+          command: |
+            cd ~/project
+            export VERSION=v$(date "+%Y%m%d_%H00")
+            ghr -n "${VERSION} ($(echo $CIRCLE_SHA1 | cut -c -7))" -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -delete ${VERSION} ~/artifacts/
+
+
+
+workflows:
+  version: 2
+  test-deploy:
+    jobs:
+      - build
+      - package:
+          context: "github release context"
+          requires:
+            - build
+          filters:
+            branches:
+              only: master
+      - publish-github-release:
+          context: "github release context"
+          requires:
+            - build
+            - package
+          filters:
+            branches:
+              only: master
