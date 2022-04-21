@@ -1,11 +1,33 @@
 # marvin README
 
-アラームをSNSから受け取って、SLACKに投げる
+Process Lambda Alarms incoming via SNS, retrieve related logs defined for settings.FUNCTION_NAMES (may be separated by commas) 
 
-## Terms
 
-- TERM-1
-    - Definition 
+Required Policies (sam):
+```yaml
+      Policies:
+
+        - SNSCrudPolicy:
+            TopicName:
+              Fn::ImportValue: !Sub 'artsub-alarms-${StageName}-ErrorNotificationSNSTopicName'
+
+        - Statement:
+            Sid: "AllowArtSubBackendGetLogEvents"
+            Effect: "Allow"
+            Action:
+              - "logs:GetLogEvents"
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/functionname-${StageName}:log-stream:*"
+
+        - Statement:
+            Sid: "AllowArtSubBackendDescribeLogStreams"
+            Effect: "Allow"
+            Action:
+              - "logs:DescribeLogGroups"
+              - "logs:DescribeLogStreams"
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/functionname-${StageName}:*"
+```
 
 
 ## Local Development

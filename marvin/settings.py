@@ -47,5 +47,5 @@ DEFAULT_UTC_OFFSET = 9  # 9 - JST (Asia/Tokyo)
 UTC_OFFSET = int(os.getenv("UTC_OFFSET"), DEFAULT_UTC_OFFSET)
 TIMEZONE = datetime.timezone(datetime.timedelta(hours=UTC_OFFSET))
 
-DEFAULT_LOG_GROUP_NAME = "/aws/lambda/LAMBDA-FUNCTION-NAME"
-LOG_GROUP_NAMES = os.getenv("LOG_GROUP_NAMES").split(",")  # Can be provided by envars
+DEFAULT_FUNCTION_NAMES = "/aws/lambda/LAMBDA-FUNCTION-NAME"
+FUNCTION_NAMES = os.getenv("FUNCTION_NAMES").split(",")  # Can be provided by envars

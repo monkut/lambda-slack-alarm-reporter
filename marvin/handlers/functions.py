@@ -85,24 +85,26 @@ def get_lambda_logs(alarm_event: dict) -> List[Optional[str]]:
     logger.debug(f"alarm_datetime={alarm_datetime}")
     logger.debug(f"error_buffered_datetime={error_buffered_datetime}")
 
-    log_group = f"/aws/lambda/{function_name}"
-    logger.info(f"describe_log_streams {log_group} ...")
-    response = LOGS_CLIENT.describe_log_streams(logGroupName=log_group, orderBy="LastEventTime", descending=True)
-    logger.info(f"describe_log_streams {log_group} ... DONE")
     formatted_events = []
-    for stream in response["logStreams"]:
-        last_event_timestamp = stream["lastEventTimestamp"] / 1000  # convert to datetime parsable value
-        last_event_datetime = datetime.datetime.fromtimestamp(last_event_timestamp)
-        last_event_datetime = last_event_datetime.replace(tzinfo=datetime.timezone.utc)
-        logger.debug(f"last_event_datetime={last_event_datetime}")
-        if last_event_datetime >= error_buffered_datetime:
-            logger.debug("-- get_logstream_events")
-            for event in get_logstream_events(
-                log_group_name=log_group, log_stream_name=stream["logStreamName"], from_datetime=error_buffered_datetime
-            ):
-                logger.debug(f"event={event}")
-                event_datetime = event["datetime"]
-                event_datetime_in_desired_timezone = event_datetime.astimezone(settings.TIMEZONE)  # settings.TIMEZONE = datetime.timezone(datetime.timedelta(hours=XXX))
-                formatted_event = f"[{event_datetime_in_desired_timezone.isoformat()}] {event['message']}"
-                formatted_events.append(formatted_event)
+    for function_name in settings.FUNCTION_NAMES:
+        log_group = f"/aws/lambda/{function_name}"
+        logger.info(f"describe_log_streams {log_group} ...")
+        response = LOGS_CLIENT.describe_log_streams(logGroupName=log_group, orderBy="LastEventTime", descending=True)
+        logger.info(f"describe_log_streams {log_group} ... DONE")
+
+        for stream in response["logStreams"]:
+            last_event_timestamp = stream["lastEventTimestamp"] / 1000  # convert to datetime parsable value
+            last_event_datetime = datetime.datetime.fromtimestamp(last_event_timestamp)
+            last_event_datetime = last_event_datetime.replace(tzinfo=datetime.timezone.utc)
+            logger.debug(f"last_event_datetime={last_event_datetime}")
+            if last_event_datetime >= error_buffered_datetime:
+                logger.debug("-- get_logstream_events")
+                for event in get_logstream_events(
+                    log_group_name=log_group, log_stream_name=stream["logStreamName"], from_datetime=error_buffered_datetime
+                ):
+                    logger.debug(f"event={event}")
+                    event_datetime = event["datetime"]
+                    event_datetime_in_desired_timezone = event_datetime.astimezone(settings.TIMEZONE)  # settings.TIMEZONE = datetime.timezone(datetime.timedelta(hours=XXX))
+                    formatted_event = f"[{event_datetime_in_desired_timezone.isoformat()}] {event['message']}"
+                    formatted_events.append(formatted_event)
     return formatted_events
